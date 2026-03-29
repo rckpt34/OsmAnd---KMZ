@@ -1,38 +1,3 @@
-import streamlit as st
-import zipfile
-import json
-import os
-import math
-import xml.etree.ElementTree as ET
-import io
-
-# --- CALCULATION LOGIC ---
-def calculate_distance(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    lat1, lon1, lat2, lon2 = map(math.radians, [float(lat1), float(lon1), float(lat2), float(lon2)])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = math.sin(dlat / 2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2)**2
-    c = 2 * math.asin(math.sqrt(a))
-    return R * c
-
-def parse_color(raw_color):
-    if not raw_color or not isinstance(raw_color, str):
-        raw_color = '#FF0000'
-    raw_hex = raw_color.replace('#', '').strip()
-
-    if len(raw_hex) == 6:
-        r, g, b = raw_hex[0:2], raw_hex[2:4], raw_hex[4:6]
-        a = 'ff'
-    elif len(raw_hex) == 8:
-        a, r, g, b = raw_hex[0:2], raw_hex[2:4], raw_hex[4:6], raw_hex[6:8]
-    else:
-        a, r, g, b = 'ff', 'ff', '00', '00'
-
-    kml_color = f"{a}{b}{g}{r}".lower()
-    mymaps_hex = f"{r}{g}{b}".upper()
-    return kml_color, mymaps_hex
-
 # --- CONVERSION ENGINE ---
 def convert_osmand_to_kmz(input_zip, keep_nth_point):
     color_map = {}
@@ -102,18 +67,19 @@ def convert_osmand_to_kmz(input_zip, keep_nth_point):
                         elem.tag = elem.tag.split('}', 1)[1]
 
                 track_raw_color = color_map.get(basename, '#FF0000')
-                track_distance_meters = distance_map.get(basename)
                 line_kml_color, line_mymaps_hex = parse_color(track_raw_color)
                 used_colors.add((line_kml_color, line_mymaps_hex))
                 line_style_url = f"#line-{line_mymaps_hex}-4000-nodesc"
 
                 for trk in root.findall('.//trk'):
                     trk_desc = trk.findtext('desc') or ''
-                    coords = []
-                    calc_total_km = 0.0
 
+                    # Process each segment individually
                     for trkseg in trk.findall('.//trkseg'):
+                        coords = []
+                        calc_total_km = 0.0
                         prev_lat, prev_lon = None, None
+                        
                         for trkpt in trkseg.findall('.//trkpt'):
                             lat = trkpt.attrib['lat']
                             lon = trkpt.attrib['lon']
@@ -124,29 +90,25 @@ def convert_osmand_to_kmz(input_zip, keep_nth_point):
                             prev_lat, prev_lon = lat, lon
                             coords.append(f"{lon},{lat},0")
 
-                    downsampled = coords[::keep_nth_point]
+                        downsampled = coords[::keep_nth_point]
 
-                    if downsampled:
-                        placemark = ET.SubElement(current_layer, f"{kml_namespace}Placemark")
+                        if downsampled:
+                            placemark = ET.SubElement(current_layer, f"{kml_namespace}Placemark")
 
-                        if track_distance_meters is not None:
-                            final_km = track_distance_meters / 1000.0
-                        else:
-                            final_km = calc_total_km
+                            # Use the calculated segment distance for the name
+                            distance_str = f"{round(calc_total_km, 1)}"
+                            if distance_str.endswith(".0"):
+                                distance_str = distance_str[:-2]
 
-                        distance_str = f"{round(final_km, 1)}"
-                        if distance_str.endswith(".0"):
-                            distance_str = distance_str[:-2]
+                            ET.SubElement(placemark, f"{kml_namespace}name").text = f"({distance_str}km) {track_name}"
 
-                        ET.SubElement(placemark, f"{kml_namespace}name").text = f"({distance_str}km) {track_name}"
+                            if trk_desc:
+                                ET.SubElement(placemark, f"{kml_namespace}description").text = trk_desc
+                            ET.SubElement(placemark, f"{kml_namespace}styleUrl").text = line_style_url
 
-                        if trk_desc:
-                            ET.SubElement(placemark, f"{kml_namespace}description").text = trk_desc
-                        ET.SubElement(placemark, f"{kml_namespace}styleUrl").text = line_style_url
-
-                        linestring = ET.SubElement(placemark, f"{kml_namespace}LineString")
-                        ET.SubElement(linestring, f"{kml_namespace}tessellate").text = "1"
-                        ET.SubElement(linestring, f"{kml_namespace}coordinates").text = " ".join(downsampled)
+                            linestring = ET.SubElement(placemark, f"{kml_namespace}LineString")
+                            ET.SubElement(linestring, f"{kml_namespace}tessellate").text = "1"
+                            ET.SubElement(linestring, f"{kml_namespace}coordinates").text = " ".join(downsampled)
 
                 for wpt in root.findall('.//wpt'):
                     wpt_name = wpt.findtext('name') or ''
@@ -250,30 +212,4 @@ def convert_osmand_to_kmz(input_zip, keep_nth_point):
         kmz.writestr('doc.kml', kml_str)
         
     return kmz_io.getvalue()
-
-# --- STREAMLIT UI ---
-st.set_page_config(page_title="OsmAnd to KMZ", page_icon="🗺️")
-st.title("🗺️ OsmAnd to KMZ Converter")
-st.write("Upload your .zip or .osf file to convert it for Google My Maps.")
-
-uploaded_file = st.file_uploader("Drop your OsmAnd file here", type=['zip', 'osf'])
-density = st.selectbox("How many points to keep?", ["All points", "Every 2nd point", "Every 3rd point"], index=1)
-
-if uploaded_file:
-    nth = 1 if "All" in density else (2 if "2nd" in density else 3)
-    
-    if st.button("Start Conversion", type="primary"):
-        with st.spinner("Converting..."):
-            kmz_data = convert_osmand_to_kmz(uploaded_file, nth)
-            
-            # Extract the original name and add .kmz
-            base_name = os.path.splitext(uploaded_file.name)[0]
-            output_filename = f"{base_name}.kmz"
-            
-            st.success("Conversion complete!")
-            st.download_button(
-                label="📥 Download KMZ File",
-                data=kmz_data,
-                file_name=output_filename,
-                mime="application/vnd.google-earth.kmz"
-            )
+                    
