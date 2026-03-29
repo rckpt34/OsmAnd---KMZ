@@ -107,7 +107,6 @@ def convert_osmand_to_kmz(input_zip, keep_nth_point):
                 used_colors.add((line_kml_color, line_mymaps_hex))
                 line_style_url = f"#line-{line_mymaps_hex}-4000-nodesc"
 
-                # Parse Tracks
                 for trk in root.findall('.//trk'):
                     trk_desc = trk.findtext('desc') or ''
                     coords = []
@@ -149,7 +148,6 @@ def convert_osmand_to_kmz(input_zip, keep_nth_point):
                         ET.SubElement(linestring, f"{kml_namespace}tessellate").text = "1"
                         ET.SubElement(linestring, f"{kml_namespace}coordinates").text = " ".join(downsampled)
 
-                # Parse Waypoints
                 for wpt in root.findall('.//wpt'):
                     wpt_name = wpt.findtext('name') or ''
                     name_lower = wpt_name.lower().strip()
@@ -188,7 +186,6 @@ def convert_osmand_to_kmz(input_zip, keep_nth_point):
             except Exception as e:
                 continue
 
-    # Build the exact StyleMap structure My Maps uses
     for kml_color, mymaps_hex in used_colors:
         line_map_id = f"line-{mymaps_hex}-4000-nodesc"
 
@@ -248,7 +245,6 @@ def convert_osmand_to_kmz(input_zip, keep_nth_point):
 
     kml_str = ET.tostring(kml, encoding='utf-8', xml_declaration=True).decode('utf-8')
     
-    # Write to a zip file in memory so Streamlit can output a true KMZ format
     kmz_io = io.BytesIO()
     with zipfile.ZipFile(kmz_io, 'w', zipfile.ZIP_DEFLATED) as kmz:
         kmz.writestr('doc.kml', kml_str)
@@ -270,10 +266,14 @@ if uploaded_file:
         with st.spinner("Converting..."):
             kmz_data = convert_osmand_to_kmz(uploaded_file, nth)
             
+            # Extract the original name and add .kmz
+            base_name = os.path.splitext(uploaded_file.name)[0]
+            output_filename = f"{base_name}.kmz"
+            
             st.success("Conversion complete!")
             st.download_button(
                 label="📥 Download KMZ File",
                 data=kmz_data,
-                file_name="compiled_tracks.kmz",
+                file_name=output_filename,
                 mime="application/vnd.google-earth.kmz"
             )
