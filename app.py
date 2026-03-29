@@ -25,10 +25,12 @@ def parse_color(raw_color):
         r, g, b = raw_hex[0:2], raw_hex[2:4], raw_hex[4:6]
         a = 'ff'
     elif len(raw_hex) == 8:
+        # Some apps use ARGB, some use RGBA. We assume ARGB for OsmAnd.
         a, r, g, b = raw_hex[0:2], raw_hex[2:4], raw_hex[4:6], raw_hex[6:8]
     else:
         a, r, g, b = 'ff', 'ff', '00', '00'
 
+    # KML uses aabbggrr
     kml_color = f"{a}{b}{g}{r}".lower()
     mymaps_hex = f"{r}{g}{b}".upper()
     return kml_color, mymaps_hex
@@ -43,7 +45,7 @@ def convert_osmand_to_kmz(uploaded_file, keep_nth_point):
     kml_namespace = "{http://www.opengis.net/kml/2.2}"
     kml = ET.Element(f"{kml_namespace}kml")
     document = ET.SubElement(kml, f"{kml_namespace}Document")
-    ET.SubElement(document, f"{kml_namespace}name").text = "OsmAnd Compiled Tracks"
+    ET.SubElement(document, f"{kml_namespace}name").text = "GPX Compiled Tracks"
 
     gpx_contents = []
 
@@ -51,19 +53,20 @@ def convert_osmand_to_kmz(uploaded_file, keep_nth_point):
     if zipfile.is_zipfile(uploaded_file):
         with zipfile.ZipFile(uploaded_file, 'r') as z:
             file_list = z.namelist()
-            # items.json is now just a backup for colors
             if 'items.json' in file_list:
                 with z.open('items.json') as f:
-                    data = json.load(f)
-                    for item in data.get('items', []):
-                        if 'file' in item and 'color' in item:
-                            color_map[os.path.basename(item['file'])] = item['color']
+                    try:
+                        data = json.load(f)
+                        for item in data.get('items', []):
+                            if 'file' in item and 'color' in item:
+                                color_map[os.path.basename(item['file'])] = item['color']
+                    except: pass
             
             for f_name in [f for f in file_list if f.lower().endswith('.gpx')]:
-                gpx_contents.append((f_name, z.read(f_name), True)) # True = is in zip
+                gpx_contents.append((f_name, z.read(f_name), True))
     else:
         uploaded_file.seek(0)
-        gpx_contents.append((uploaded_file.name, uploaded_file.read(), False)) # False = single file
+        gpx_contents.append((uploaded_file.name, uploaded_file.read(), False))
 
     # 2. PROCESS GPX DATA
     for filename, xml_content, was_zipped in gpx_contents:
@@ -71,7 +74,6 @@ def convert_osmand_to_kmz(uploaded_file, keep_nth_point):
             basename = os.path.basename(filename)
             track_name = os.path.splitext(basename)[0]
             
-            # Determine Folder Logic
             current_layer = document
             if was_zipped:
                 dir_name = os.path.dirname(filename)
@@ -83,12 +85,13 @@ def convert_osmand_to_kmz(uploaded_file, keep_nth_point):
                 current_layer = folders[parent_folder]
 
             root = ET.fromstring(xml_content)
+            # Remove namespaces from tags for easier searching
             for elem in root.iter():
                 if '}' in elem.tag: elem.tag = elem.tag.split('}', 1)[1]
 
-            # --- DYNAMIC COLOR DISCOVERY ---
+            # --- COLOR DISCOVERY ---
             track_raw_color = None
-            # Search XML extensions first (Works for Gaia/OsmAnd single exports)
+            # Check for <color> tags anywhere in the track extensions (Gaia/OsmAnd)
             for trk in root.findall('.//trk'):
                 for child in trk.iter():
                     if 'color' in child.tag.lower() and child.text:
@@ -96,7 +99,6 @@ def convert_osmand_to_kmz(uploaded_file, keep_nth_point):
                         break
                 if track_raw_color: break
             
-            # Fallback to items.json color if XML search failed
             if not track_raw_color:
                 track_raw_color = color_map.get(basename, '#FF0000')
             
@@ -150,40 +152,57 @@ def convert_osmand_to_kmz(uploaded_file, keep_nth_point):
 
         except Exception: continue
 
-    # --- STYLE GENERATION ---
+    # --- STYLE GENERATION (Strict Logic) ---
     for kml_color, mymaps_hex in used_colors:
         line_map_id = f"line-{mymaps_hex}-4000-nodesc"
-        for suffix, width in [("-normal", "4"), ("-highlight", "6")]:
-            style = ET.Element(f"{kml_namespace}Style", id=f"{line_map_id}{suffix}")
-            ls = ET.SubElement(style, f"{kml_namespace}LineStyle")
-            ET.SubElement(ls, f"{kml_namespace}color").text = kml_color
-            ET.SubElement(ls, f"{kml_namespace}width").text = width
-            document.append(style)
         
-        smap = ET.Element(f"{kml_namespace}StyleMap", id=line_map_id)
-        for key, suffix in [("normal", "-normal"), ("highlight", "-highlight")]:
-            p = ET.SubElement(smap, f"{kml_namespace}Pair")
-            ET.SubElement(p, f"{kml_namespace}key").text = key
-            ET.SubElement(p, f"{kml_namespace}styleUrl").text = f"#{line_map_id}{suffix}"
-        document.append(smap)
+        # Line Normal
+        sn = ET.SubElement(document, f"{kml_namespace}Style", id=f"{line_map_id}-normal")
+        lsn = ET.SubElement(sn, f"{kml_namespace}LineStyle")
+        ET.SubElement(lsn, f"{kml_namespace}color").text = kml_color
+        ET.SubElement(lsn, f"{kml_namespace}width").text = "4"
+        
+        # Line Highlight
+        sh = ET.SubElement(document, f"{kml_namespace}Style", id=f"{line_map_id}-highlight")
+        lsh = ET.SubElement(sh, f"{kml_namespace}LineStyle")
+        ET.SubElement(lsh, f"{kml_namespace}color").text = kml_color
+        ET.SubElement(lsh, f"{kml_namespace}width").text = "6"
+        
+        # Line StyleMap
+        sm = ET.SubElement(document, f"{kml_namespace}StyleMap", id=line_map_id)
+        p1 = ET.SubElement(sm, f"{kml_namespace}Pair")
+        ET.SubElement(p1, f"{kml_namespace}key").text = "normal"
+        ET.SubElement(p1, f"{kml_namespace}styleUrl").text = f"#{line_map_id}-normal"
+        p2 = ET.SubElement(sm, f"{kml_namespace}Pair")
+        ET.SubElement(p2, f"{kml_namespace}key").text = "highlight"
+        ET.SubElement(p2, f"{kml_namespace}styleUrl").text = f"#{line_map_id}-highlight"
 
         icon_map_id = f"icon-1899-{mymaps_hex}-nodesc"
-        for suffix in ["-normal", "-highlight"]:
-            style = ET.Element(f"{kml_namespace}Style", id=f"{icon_map_id}{suffix}")
-            is_e = ET.SubElement(style, f"{kml_namespace}IconStyle")
-            ET.SubElement(is_e, f"{kml_namespace}scale").text = "1"
-            ET.SubElement(is_e, f"{kml_namespace}color").text = kml_color
-            icon = ET.SubElement(is_e, f"{kml_namespace}Icon")
-            ET.SubElement(icon, f"{kml_namespace}href").text = "https://www.gstatic.com/mapspro/images/stock/503-wht-blank_maps.png"
-            ET.SubElement(is_e, f"{kml_namespace}hotSpot", x="32", xunits="pixels", y="64", yunits="insetPixels")
-            document.append(style)
         
-        ismap = ET.Element(f"{kml_namespace}StyleMap", id=icon_map_id)
-        for key, suffix in [("normal", "-normal"), ("highlight", "-highlight")]:
-            p = ET.SubElement(ismap, f"{kml_namespace}Pair")
-            ET.SubElement(p, f"{kml_namespace}key").text = key
-            ET.SubElement(p, f"{kml_namespace}styleUrl").text = f"#{icon_map_id}{suffix}"
-        document.append(ismap)
+        # Icon Normal
+        in_s = ET.SubElement(document, f"{kml_namespace}Style", id=f"{icon_map_id}-normal")
+        isn = ET.SubElement(in_s, f"{kml_namespace}IconStyle")
+        ET.SubElement(isn, f"{kml_namespace}color").text = kml_color
+        icon_n = ET.SubElement(isn, f"{kml_namespace}Icon")
+        ET.SubElement(icon_n, f"{kml_namespace}href").text = "https://www.gstatic.com/mapspro/images/stock/503-wht-blank_maps.png"
+        ET.SubElement(isn, f"{kml_namespace}hotSpot", x="32", xunits="pixels", y="64", yunits="insetPixels")
+        
+        # Icon Highlight
+        ih_s = ET.SubElement(document, f"{kml_namespace}Style", id=f"{icon_map_id}-highlight")
+        ish = ET.SubElement(ih_s, f"{kml_namespace}IconStyle")
+        ET.SubElement(ish, f"{kml_namespace}color").text = kml_color
+        icon_h = ET.SubElement(ish, f"{kml_namespace}Icon")
+        ET.SubElement(icon_h, f"{kml_namespace}href").text = "https://www.gstatic.com/mapspro/images/stock/503-wht-blank_maps.png"
+        ET.SubElement(ish, f"{kml_namespace}hotSpot", x="32", xunits="pixels", y="64", yunits="insetPixels")
+        
+        # Icon StyleMap
+        ism = ET.SubElement(document, f"{kml_namespace}StyleMap", id=icon_map_id)
+        p3 = ET.SubElement(ism, f"{kml_namespace}Pair")
+        ET.SubElement(p3, f"{kml_namespace}key").text = "normal"
+        ET.SubElement(p3, f"{kml_namespace}styleUrl").text = f"#{icon_map_id}-normal"
+        p4 = ET.SubElement(ism, f"{kml_namespace}Pair")
+        ET.SubElement(p4, f"{kml_namespace}key").text = "highlight"
+        ET.SubElement(p4, f"{kml_namespace}styleUrl").text = f"#{icon_map_id}-highlight"
 
     kml_str = ET.tostring(kml, encoding='utf-8', xml_declaration=True).decode('utf-8')
     kmz_io = io.BytesIO()
@@ -207,4 +226,4 @@ if uploaded_file:
             output_filename = os.path.splitext(uploaded_file.name)[0] + ".kmz"
             st.success("Conversion complete!")
             st.download_button("📥 Download KMZ File", data=kmz_data, file_name=output_filename, mime="application/vnd.google-earth.kmz")
-            
+        
