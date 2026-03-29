@@ -261,14 +261,14 @@ if uploaded_file:
         with st.spinner("Converting..."):
             kmz_data = convert_osmand_to_kmz(uploaded_file, nth)
             
+            # Extract the original name and add .kmz
             base_name = os.path.splitext(uploaded_file.name)[0]
             output_filename = f"{base_name}.kmz"
             
-            st.success("Conversion complete!")
             st.download_button(
                 label="📥 Download KMZ File",
                 data=kmz_data,
                 file_name=output_filename,
                 mime="application/vnd.google-earth.kmz"
-                )
+                        )
         
