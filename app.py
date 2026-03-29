@@ -78,7 +78,6 @@ def convert_osmand_to_kmz(input_zip, keep_nth_point):
             try:
                 basename = os.path.basename(gpx_file)
                 track_name = os.path.splitext(basename)[0]
-
                 dir_name = os.path.dirname(gpx_file)
                 parent_folder = os.path.basename(dir_name) if dir_name else "Uncategorized Tracks"
 
@@ -106,6 +105,7 @@ def convert_osmand_to_kmz(input_zip, keep_nth_point):
                 used_colors.add((line_kml_color, line_mymaps_hex))
                 line_style_url = f"#line-{line_mymaps_hex}-4000-nodesc"
 
+                # Process tracks and their segments
                 for trk in root.findall('.//trk'):
                     trk_desc = trk.findtext('desc') or ''
                     
@@ -118,10 +118,8 @@ def convert_osmand_to_kmz(input_zip, keep_nth_point):
                         for trkpt in trkseg.findall('.//trkpt'):
                             lat = trkpt.attrib['lat']
                             lon = trkpt.attrib['lon']
-
                             if prev_lat is not None and prev_lon is not None:
                                 calc_total_km += calculate_distance(prev_lat, prev_lon, lat, lon)
-
                             prev_lat, prev_lon = lat, lon
                             coords.append(f"{lon},{lat},0")
 
@@ -129,6 +127,121 @@ def convert_osmand_to_kmz(input_zip, keep_nth_point):
 
                         if downsampled:
                             placemark = ET.SubElement(current_layer, f"{kml_namespace}Placemark")
-
+                            
+                            # Calculate distance string
                             distance_str = f"{round(calc_total_km, 1)}"
-                            if distance_
+                            if distance_str.endswith(".0"):
+                                distance_str = distance_str[:-2]
+
+                            # Name includes segment number if there's more than one
+                            seg_suffix = f" Part {i+1}" if len(segments) > 1 else ""
+                            ET.SubElement(placemark, f"{kml_namespace}name").text = f"({distance_str}km) {track_name}{seg_suffix}"
+
+                            if trk_desc:
+                                ET.SubElement(placemark, f"{kml_namespace}description").text = trk_desc
+                            ET.SubElement(placemark, f"{kml_namespace}styleUrl").text = line_style_url
+
+                            linestring = ET.SubElement(placemark, f"{kml_namespace}LineString")
+                            ET.SubElement(linestring, f"{kml_namespace}tessellate").text = "1"
+                            ET.SubElement(linestring, f"{kml_namespace}coordinates").text = " ".join(downsampled)
+
+                # Waypoints logic
+                for wpt in root.findall('.//wpt'):
+                    wpt_name = wpt.findtext('name') or ''
+                    if wpt_name.lower().strip() in ['start', 'end', 'finish', 'destination']:
+                        continue
+
+                    wpt_desc = wpt.findtext('desc') or ''
+                    lon, lat = wpt.attrib['lon'], wpt.attrib['lat']
+                    wpt_color_raw = None
+                    for child in wpt.iter():
+                        if child.tag.lower() == 'color' and child.text:
+                            wpt_color_raw = child.text
+                            break
+                    if not wpt_color_raw and wpt_name in name_color_map:
+                        wpt_color_raw = name_color_map[wpt_name]
+                    if not wpt_color_raw:
+                        wpt_color_raw = track_raw_color
+
+                    wpt_kml_color, wpt_mymaps_hex = parse_color(wpt_color_raw)
+                    used_colors.add((wpt_kml_color, wpt_mymaps_hex))
+                    icon_style_url = f"#icon-1899-{wpt_mymaps_hex}-nodesc"
+
+                    placemark = ET.SubElement(current_layer, f"{kml_namespace}Placemark")
+                    if wpt_name: ET.SubElement(placemark, f"{kml_namespace}name").text = wpt_name
+                    if wpt_desc: ET.SubElement(placemark, f"{kml_namespace}description").text = wpt_desc
+                    ET.SubElement(placemark, f"{kml_namespace}styleUrl").text = icon_style_url
+                    point = ET.SubElement(placemark, f"{kml_namespace}Point")
+                    ET.SubElement(point, f"{kml_namespace}coordinates").text = f"{lon},{lat},0"
+
+            except Exception:
+                continue
+
+    # Style generation block
+    for kml_color, mymaps_hex in used_colors:
+        line_map_id = f"line-{mymaps_hex}-4000-nodesc"
+        for suffix, width in [("-normal", "4"), ("-highlight", "6")]:
+            style = ET.SubElement(document, f"{kml_namespace}Style", id=f"{line_map_id}{suffix}")
+            ls = ET.SubElement(style, f"{kml_namespace}LineStyle")
+            ET.SubElement(ls, f"{kml_namespace}color").text = kml_color
+            ET.SubElement(ls, f"{kml_namespace}width").text = width
+        
+        smap = ET.SubElement(document, f"{kml_namespace}StyleMap", id=line_map_id)
+        for key, suffix in [("normal", "-normal"), ("highlight", "-highlight")]:
+            pair = ET.SubElement(smap, f"{kml_namespace}Pair")
+            ET.SubElement(pair, f"{kml_namespace}key").text = key
+            ET.SubElement(pair, f"{kml_namespace}styleUrl").text = f"#{line_map_id}{suffix}"
+
+        icon_map_id = f"icon-1899-{mymaps_hex}-nodesc"
+        icon_url = "https://www.gstatic.com/mapspro/images/stock/503-wht-blank_maps.png"
+        for suffix in ["-normal", "-highlight"]:
+            style = ET.SubElement(document, f"{kml_namespace}Style", id=f"{icon_map_id}{suffix}")
+            is_elem = ET.SubElement(style, f"{kml_namespace}IconStyle")
+            ET.SubElement(is_elem, f"{kml_namespace}scale").text = "1"
+            ET.SubElement(is_elem, f"{kml_namespace}color").text = kml_color
+            icon = ET.SubElement(is_elem, f"{kml_namespace}Icon")
+            ET.SubElement(icon, f"{kml_namespace}href").text = icon_url
+            ET.SubElement(is_elem, f"{kml_namespace}hotSpot", x="32", xunits="pixels", y="64", yunits="insetPixels")
+        
+        ismap = ET.SubElement(document, f"{kml_namespace}StyleMap", id=icon_map_id)
+        for key, suffix in [("normal", "-normal"), ("highlight", "-highlight")]:
+            pair = ET.SubElement(ismap, f"{kml_namespace}Pair")
+            ET.SubElement(pair, f"{kml_namespace}key").text = key
+            ET.SubElement(pair, f"{kml_namespace}styleUrl").text = f"#{icon_map_id}{suffix}"
+
+    for folder_elem in folders.values():
+        document.append(folder_elem)
+
+    kml_str = ET.tostring(kml, encoding='utf-8', xml_declaration=True).decode('utf-8')
+    kmz_io = io.BytesIO()
+    with zipfile.ZipFile(kmz_io, 'w', zipfile.ZIP_DEFLATED) as kmz:
+        kmz.writestr('doc.kml', kml_str)
+        
+    return kmz_io.getvalue()
+
+# --- STREAMLIT UI ---
+st.set_page_config(page_title="OsmAnd to KMZ", page_icon="🗺️")
+st.title("🗺️ OsmAnd to KMZ Converter")
+st.write("Upload your .zip or .osf file to convert it for Google My Maps.")
+
+uploaded_file = st.file_uploader("Drop your OsmAnd file here", type=['zip', 'osf'])
+density = st.selectbox("How many points to keep?", ["All points", "Every 2nd point", "Every 3rd point"], index=1)
+
+if uploaded_file:
+    nth = 1 if "All" in density else (2 if "2nd" in density else 3)
+    
+    if st.button("Start Conversion", type="primary"):
+        with st.spinner("Converting..."):
+            kmz_data = convert_osmand_to_kmz(uploaded_file, nth)
+            
+            base_name = os.path.splitext(uploaded_file.name)[0]
+            output_filename = f"{base_name}.kmz"
+            
+            st.success("Conversion complete!")
+            st.download_button(
+                label="📥 Download KMZ File",
+                data=kmz_data,
+                file_name=output_filename,
+                mime="application/vnd.google-earth.kmz"
+    )
+                        
