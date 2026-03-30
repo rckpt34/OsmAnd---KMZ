@@ -93,8 +93,10 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
             track_name = os.path.splitext(basename)[0]
             
             if not is_zip:
-                parent_folder = "Tracks"
+                # If it's a single GPX file, name the layer after the file name
+                parent_folder = track_name
             else:
+                # If it's from a zip/osf, name the layer after the immediate parent folder
                 parent_folder = os.path.basename(dir_name) if dir_name else "Uncategorized Tracks"
 
             if parent_folder not in folders:
@@ -187,16 +189,8 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
                 wpt_desc = wpt.findtext('desc') or ''
                 lon, lat = wpt.attrib['lon'], wpt.attrib['lat']
                 
-                # Determine layer based on group type
-                wpt_type = wpt.findtext('type')
-                wpt_folder_name = wpt_type.strip() if wpt_type and wpt_type.strip() else parent_folder
-
-                if wpt_folder_name not in folders:
-                    folder_elem = ET.Element(f"{kml_namespace}Folder")
-                    ET.SubElement(folder_elem, f"{kml_namespace}name").text = wpt_folder_name
-                    folders[wpt_folder_name] = folder_elem
-                
-                target_layer = folders[wpt_folder_name]
+                # Put waypoints in the exact same layer as the track/file
+                target_layer = current_layer
 
                 wpt_color_raw = None
                 
@@ -306,4 +300,3 @@ if uploaded_file:
                 file_name=output_filename,
                 mime="application/vnd.google-earth.kmz"
         )
-        
