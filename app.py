@@ -34,12 +34,13 @@ def parse_color(raw_color):
     return kml_color, mymaps_hex
 
 # --- CONVERSION ENGINE ---
-def convert_osmand_to_kmz(input_zip, keep_nth_point):
+def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
     color_map = {}
     name_color_map = {}
     distance_map = {}
     used_colors = set()
     folders = {}
+    gpx_files_data = []
 
     ET.register_namespace('', "http://www.opengis.net/kml/2.2")
     kml_namespace = "{http://www.opengis.net/kml/2.2}"
@@ -48,131 +49,168 @@ def convert_osmand_to_kmz(input_zip, keep_nth_point):
     document = ET.SubElement(kml, f"{kml_namespace}Document")
     ET.SubElement(document, f"{kml_namespace}name").text = "OsmAnd Compiled Tracks"
 
-    with zipfile.ZipFile(input_zip, 'r') as z:
-        file_list = z.namelist()
+    is_zip = uploaded_filename.lower().endswith(('.zip', '.osf'))
 
-        if 'items.json' in file_list:
-            with z.open('items.json') as f:
-                data = json.load(f)
-                for item in data.get('items', []):
-                    if 'file' in item:
-                        basename = os.path.basename(item['file'])
-                        if 'color' in item:
-                            color_map[basename] = item['color']
-                        if 'total_distance' in item:
-                            try:
-                                distance_map[basename] = float(item['total_distance'])
-                            except ValueError:
-                                pass
-                        elif 'distance' in item:
-                            try:
-                                distance_map[basename] = float(item['distance'])
-                            except ValueError:
-                                pass
-                    if 'name' in item and 'color' in item:
-                        name_color_map[item['name']] = item['color']
+    if is_zip:
+        with zipfile.ZipFile(input_file, 'r') as z:
+            file_list = z.namelist()
 
-        gpx_files = [f for f in file_list if f.lower().endswith('.gpx')]
+            if 'items.json' in file_list:
+                with z.open('items.json') as f:
+                    data = json.load(f)
+                    for item in data.get('items', []):
+                        if 'file' in item:
+                            basename = os.path.basename(item['file'])
+                            if 'color' in item:
+                                color_map[basename] = item['color']
+                            if 'total_distance' in item:
+                                try:
+                                    distance_map[basename] = float(item['total_distance'])
+                                except ValueError:
+                                    pass
+                            elif 'distance' in item:
+                                try:
+                                    distance_map[basename] = float(item['distance'])
+                                except ValueError:
+                                    pass
+                        if 'name' in item and 'color' in item:
+                            name_color_map[item['name']] = item['color']
 
-        for gpx_file in gpx_files:
-            try:
+            gpx_files = [f for f in file_list if f.lower().endswith('.gpx')]
+
+            for gpx_file in gpx_files:
                 basename = os.path.basename(gpx_file)
-                track_name = os.path.splitext(basename)[0]
                 dir_name = os.path.dirname(gpx_file)
+                with z.open(gpx_file) as f:
+                    gpx_files_data.append((basename, dir_name, f.read()))
+    else:
+        basename = os.path.basename(uploaded_filename)
+        dir_name = ""
+        gpx_files_data.append((basename, dir_name, input_file.read()))
+
+    for basename, dir_name, xml_content in gpx_files_data:
+        try:
+            track_name = os.path.splitext(basename)[0]
+            
+            if not is_zip:
+                parent_folder = "Tracks"
+            else:
                 parent_folder = os.path.basename(dir_name) if dir_name else "Uncategorized Tracks"
 
-                if parent_folder not in folders:
-                    folder_elem = ET.Element(f"{kml_namespace}Folder")
-                    ET.SubElement(folder_elem, f"{kml_namespace}name").text = parent_folder
-                    folders[parent_folder] = folder_elem
+            if parent_folder not in folders:
+                folder_elem = ET.Element(f"{kml_namespace}Folder")
+                ET.SubElement(folder_elem, f"{kml_namespace}name").text = parent_folder
+                folders[parent_folder] = folder_elem
 
-                current_layer = folders[parent_folder]
+            current_layer = folders[parent_folder]
 
-                with z.open(gpx_file) as f:
-                    xml_content = f.read()
+            try:
+                root = ET.fromstring(xml_content)
+            except ET.ParseError:
+                continue
 
-                try:
-                    root = ET.fromstring(xml_content)
-                except ET.ParseError:
+            for elem in root.iter():
+                if '}' in elem.tag:
+                    elem.tag = elem.tag.split('}', 1)[1]
+
+            track_color_from_gpx = None
+            for ext in root.findall('./extensions'):
+                for color_elem in ext.findall('.//color'):
+                    if color_elem.text:
+                        track_color_from_gpx = color_elem.text
+                        break
+                if track_color_from_gpx:
+                    break
+            
+            if not track_color_from_gpx:
+                for trk in root.findall('.//trk'):
+                    for ext in trk.findall('.//extensions'):
+                        for color_elem in ext.findall('.//color'):
+                            if color_elem.text:
+                                track_color_from_gpx = color_elem.text
+                                break
+                        if track_color_from_gpx:
+                            break
+                    if track_color_from_gpx:
+                        break
+
+            if track_color_from_gpx:
+                track_raw_color = track_color_from_gpx
+            else:
+                track_raw_color = color_map.get(basename, '#FF0000')
+
+            line_kml_color, line_mymaps_hex = parse_color(track_raw_color)
+            used_colors.add((line_kml_color, line_mymaps_hex))
+            line_style_url = f"#line-{line_mymaps_hex}-4000-nodesc"
+
+            for trk in root.findall('.//trk'):
+                trk_desc = trk.findtext('desc') or ''
+                
+                # Split into segments
+                for trkseg in trk.findall('.//trkseg'):
+                    coords = []
+                    calc_total_km = 0.0
+                    prev_lat, prev_lon = None, None
+
+                    for trkpt in trkseg.findall('.//trkpt'):
+                        lat = trkpt.attrib['lat']
+                        lon = trkpt.attrib['lon']
+                        if prev_lat is not None and prev_lon is not None:
+                            calc_total_km += calculate_distance(prev_lat, prev_lon, lat, lon)
+                        prev_lat, prev_lon = lat, lon
+                        coords.append(f"{lon},{lat},0")
+
+                    downsampled = coords[::keep_nth_point]
+
+                    if downsampled:
+                        placemark = ET.SubElement(current_layer, f"{kml_namespace}Placemark")
+                        distance_str = f"{round(calc_total_km, 1)}"
+                        if distance_str.endswith(".0"):
+                            distance_str = distance_str[:-2]
+
+                        ET.SubElement(placemark, f"{kml_namespace}name").text = f"({distance_str}km) {track_name}"
+                        if trk_desc:
+                            ET.SubElement(placemark, f"{kml_namespace}description").text = trk_desc
+                        
+                        # Use the color URL generated before the loop
+                        ET.SubElement(placemark, f"{kml_namespace}styleUrl").text = line_style_url
+
+                        linestring = ET.SubElement(placemark, f"{kml_namespace}LineString")
+                        ET.SubElement(linestring, f"{kml_namespace}tessellate").text = "1"
+                        ET.SubElement(linestring, f"{kml_namespace}coordinates").text = " ".join(downsampled)
+
+            for wpt in root.findall('.//wpt'):
+                wpt_name = wpt.findtext('name') or ''
+                if wpt_name.lower().strip() in ['start', 'end', 'finish', 'destination']:
                     continue
 
-                for elem in root.iter():
-                    if '}' in elem.tag:
-                        elem.tag = elem.tag.split('}', 1)[1]
+                wpt_desc = wpt.findtext('desc') or ''
+                lon, lat = wpt.attrib['lon'], wpt.attrib['lat']
+                wpt_color_raw = None
+                for child in wpt.iter():
+                    if child.tag.lower() == 'color' and child.text:
+                        wpt_color_raw = child.text
+                        break
 
-                track_raw_color = color_map.get(basename, '#FF0000')
-                line_kml_color, line_mymaps_hex = parse_color(track_raw_color)
-                used_colors.add((line_kml_color, line_mymaps_hex))
-                line_style_url = f"#line-{line_mymaps_hex}-4000-nodesc"
+                if not wpt_color_raw and wpt_name in name_color_map:
+                    wpt_color_raw = name_color_map[wpt_name]
+                if not wpt_color_raw:
+                    wpt_color_raw = track_raw_color
 
-                for trk in root.findall('.//trk'):
-                    trk_desc = trk.findtext('desc') or ''
-                    
-                    # Split into segments
-                    for trkseg in trk.findall('.//trkseg'):
-                        coords = []
-                        calc_total_km = 0.0
-                        prev_lat, prev_lon = None, None
+                wpt_kml_color, wpt_mymaps_hex = parse_color(wpt_color_raw)
+                used_colors.add((wpt_kml_color, wpt_mymaps_hex))
+                icon_style_url = f"#icon-1899-{wpt_mymaps_hex}-nodesc"
 
-                        for trkpt in trkseg.findall('.//trkpt'):
-                            lat = trkpt.attrib['lat']
-                            lon = trkpt.attrib['lon']
-                            if prev_lat is not None and prev_lon is not None:
-                                calc_total_km += calculate_distance(prev_lat, prev_lon, lat, lon)
-                            prev_lat, prev_lon = lat, lon
-                            coords.append(f"{lon},{lat},0")
+                placemark = ET.SubElement(current_layer, f"{kml_namespace}Placemark")
+                if wpt_name: ET.SubElement(placemark, f"{kml_namespace}name").text = wpt_name
+                if wpt_desc: ET.SubElement(placemark, f"{kml_namespace}description").text = wpt_desc
+                ET.SubElement(placemark, f"{kml_namespace}styleUrl").text = icon_style_url
 
-                        downsampled = coords[::keep_nth_point]
+                point = ET.SubElement(placemark, f"{kml_namespace}Point")
+                ET.SubElement(point, f"{kml_namespace}coordinates").text = f"{lon},{lat},0"
 
-                        if downsampled:
-                            placemark = ET.SubElement(current_layer, f"{kml_namespace}Placemark")
-                            distance_str = f"{round(calc_total_km, 1)}"
-                            if distance_str.endswith(".0"):
-                                distance_str = distance_str[:-2]
-
-                            ET.SubElement(placemark, f"{kml_namespace}name").text = f"({distance_str}km) {track_name}"
-                            if trk_desc:
-                                ET.SubElement(placemark, f"{kml_namespace}description").text = trk_desc
-                            
-                            # Use the color URL generated before the loop
-                            ET.SubElement(placemark, f"{kml_namespace}styleUrl").text = line_style_url
-
-                            linestring = ET.SubElement(placemark, f"{kml_namespace}LineString")
-                            ET.SubElement(linestring, f"{kml_namespace}tessellate").text = "1"
-                            ET.SubElement(linestring, f"{kml_namespace}coordinates").text = " ".join(downsampled)
-
-                for wpt in root.findall('.//wpt'):
-                    wpt_name = wpt.findtext('name') or ''
-                    if wpt_name.lower().strip() in ['start', 'end', 'finish', 'destination']:
-                        continue
-
-                    wpt_desc = wpt.findtext('desc') or ''
-                    lon, lat = wpt.attrib['lon'], wpt.attrib['lat']
-                    wpt_color_raw = None
-                    for child in wpt.iter():
-                        if child.tag.lower() == 'color' and child.text:
-                            wpt_color_raw = child.text
-                            break
-
-                    if not wpt_color_raw and wpt_name in name_color_map:
-                        wpt_color_raw = name_color_map[wpt_name]
-                    if not wpt_color_raw:
-                        wpt_color_raw = track_raw_color
-
-                    wpt_kml_color, wpt_mymaps_hex = parse_color(wpt_color_raw)
-                    used_colors.add((wpt_kml_color, wpt_mymaps_hex))
-                    icon_style_url = f"#icon-1899-{wpt_mymaps_hex}-nodesc"
-
-                    placemark = ET.SubElement(current_layer, f"{kml_namespace}Placemark")
-                    if wpt_name: ET.SubElement(placemark, f"{kml_namespace}name").text = wpt_name
-                    if wpt_desc: ET.SubElement(placemark, f"{kml_namespace}description").text = wpt_desc
-                    ET.SubElement(placemark, f"{kml_namespace}styleUrl").text = icon_style_url
-
-                    point = ET.SubElement(placemark, f"{kml_namespace}Point")
-                    ET.SubElement(point, f"{kml_namespace}coordinates").text = f"{lon},{lat},0"
-
-            except Exception:
-                continue
+        except Exception:
+            continue
 
     # --- STYLE DEFINITIONS (Crucial for Colors) ---
     for kml_color, mymaps_hex in used_colors:
@@ -235,16 +273,16 @@ def convert_osmand_to_kmz(input_zip, keep_nth_point):
 # --- STREAMLIT UI ---
 st.set_page_config(page_title="OsmAnd to KMZ", page_icon="🗺️")
 st.title("🗺️ OsmAnd to KMZ Converter")
-st.write("Upload your .zip or .osf file to convert it for Google My Maps.")
+st.write("Upload your .zip, .osf, or .gpx file to convert it for Google My Maps.")
 
-uploaded_file = st.file_uploader("Drop your OsmAnd file here", type=['zip', 'osf'])
+uploaded_file = st.file_uploader("Drop your OsmAnd file here", type=['zip', 'osf', 'gpx'])
 density = st.selectbox("How many points to keep?", ["All points", "Every 2nd point", "Every 3rd point"], index=1)
 
 if uploaded_file:
     nth = 1 if "All" in density else (2 if "2nd" in density else 3)
     if st.button("Start Conversion", type="primary"):
         with st.spinner("Converting..."):
-            kmz_data = convert_osmand_to_kmz(uploaded_file, nth)
+            kmz_data = convert_osmand_to_kmz(uploaded_file, nth, uploaded_file.name)
             base_name = os.path.splitext(uploaded_file.name)[0]
             output_filename = f"{base_name}.kmz"
             st.success("Conversion complete!")
@@ -253,4 +291,5 @@ if uploaded_file:
                 data=kmz_data,
                 file_name=output_filename,
                 mime="application/vnd.google-earth.kmz"
-    )
+        )
+                                
