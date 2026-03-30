@@ -187,8 +187,10 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
                 wpt_desc = wpt.findtext('desc') or ''
                 lon, lat = wpt.attrib['lon'], wpt.attrib['lat']
                 wpt_color_raw = None
+                
+                # Robust namespace check for waypoint color
                 for child in wpt.iter():
-                    if child.tag.lower() == 'color' and child.text:
+                    if child.tag.split('}')[-1].split(':')[-1].lower() == 'color' and child.text:
                         wpt_color_raw = child.text
                         break
 
@@ -291,5 +293,5 @@ if uploaded_file:
                 data=kmz_data,
                 file_name=output_filename,
                 mime="application/vnd.google-earth.kmz"
-        )
-                                
+            )
+                
