@@ -186,6 +186,18 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
 
                 wpt_desc = wpt.findtext('desc') or ''
                 lon, lat = wpt.attrib['lon'], wpt.attrib['lat']
+                
+                # Determine layer based on group type
+                wpt_type = wpt.findtext('type')
+                wpt_folder_name = wpt_type.strip() if wpt_type and wpt_type.strip() else parent_folder
+
+                if wpt_folder_name not in folders:
+                    folder_elem = ET.Element(f"{kml_namespace}Folder")
+                    ET.SubElement(folder_elem, f"{kml_namespace}name").text = wpt_folder_name
+                    folders[wpt_folder_name] = folder_elem
+                
+                target_layer = folders[wpt_folder_name]
+
                 wpt_color_raw = None
                 
                 # Robust namespace check for waypoint color
@@ -203,7 +215,7 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
                 used_colors.add((wpt_kml_color, wpt_mymaps_hex))
                 icon_style_url = f"#icon-1899-{wpt_mymaps_hex}-nodesc"
 
-                placemark = ET.SubElement(current_layer, f"{kml_namespace}Placemark")
+                placemark = ET.SubElement(target_layer, f"{kml_namespace}Placemark")
                 if wpt_name: ET.SubElement(placemark, f"{kml_namespace}name").text = wpt_name
                 if wpt_desc: ET.SubElement(placemark, f"{kml_namespace}description").text = wpt_desc
                 ET.SubElement(placemark, f"{kml_namespace}styleUrl").text = icon_style_url
@@ -293,5 +305,5 @@ if uploaded_file:
                 data=kmz_data,
                 file_name=output_filename,
                 mime="application/vnd.google-earth.kmz"
-            )
-                
+        )
+        
