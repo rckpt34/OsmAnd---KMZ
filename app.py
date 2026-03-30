@@ -93,10 +93,8 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
             track_name = os.path.splitext(basename)[0]
             
             if not is_zip:
-                # If it's a single GPX file, name the layer after the file name
                 parent_folder = track_name
             else:
-                # If it's from a zip/osf, name the layer after the immediate parent folder
                 parent_folder = os.path.basename(dir_name) if dir_name else "Uncategorized Tracks"
 
             if parent_folder not in folders:
@@ -115,11 +113,14 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
                 if '}' in elem.tag:
                     elem.tag = elem.tag.split('}', 1)[1]
 
-            # Determine Track Color Priority
-            # 1. Try taking it from the JSON color_map first
+            # --- Extract Metadata Description for Tracks ---
+            track_metadata_desc = ""
+            metadata = root.find('.//metadata')
+            if metadata is not None:
+                track_metadata_desc = metadata.findtext('desc') or ''
+
             track_raw_color = color_map.get(basename)
             
-            # 2. If no JSON color is available, fall back to GPX extensions
             if not track_raw_color:
                 track_color_from_gpx = None
                 for ext in root.findall('./extensions'):
@@ -149,9 +150,6 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
             line_style_url = f"#line-{line_mymaps_hex}-4000-nodesc"
 
             for trk in root.findall('.//trk'):
-                trk_desc = trk.findtext('desc') or ''
-                
-                # Split into segments
                 for trkseg in trk.findall('.//trkseg'):
                     coords = []
                     calc_total_km = 0.0
@@ -174,10 +172,10 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
                             distance_str = distance_str[:-2]
 
                         ET.SubElement(placemark, f"{kml_namespace}name").text = f"({distance_str}km) {track_name}"
-                        if trk_desc:
-                            ET.SubElement(placemark, f"{kml_namespace}description").text = trk_desc
                         
-                        # Use the color URL generated before the loop
+                        if track_metadata_desc:
+                            ET.SubElement(placemark, f"{kml_namespace}description").text = track_metadata_desc
+                        
                         ET.SubElement(placemark, f"{kml_namespace}styleUrl").text = line_style_url
 
                         linestring = ET.SubElement(placemark, f"{kml_namespace}LineString")
@@ -192,12 +190,10 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
                 wpt_desc = wpt.findtext('desc') or ''
                 lon, lat = wpt.attrib['lon'], wpt.attrib['lat']
                 
-                # Put waypoints in the exact same layer as the track/file
                 target_layer = current_layer
 
                 wpt_color_raw = None
                 
-                # Robust namespace check for waypoint color
                 for child in wpt.iter():
                     if child.tag.split('}')[-1].split(':')[-1].lower() == 'color' and child.text:
                         wpt_color_raw = child.text
@@ -223,7 +219,7 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
         except Exception:
             continue
 
-    # --- STYLE DEFINITIONS (Crucial for Colors) ---
+    # --- STYLE DEFINITIONS ---
     for kml_color, mymaps_hex in used_colors:
         line_map_id = f"line-{mymaps_hex}-4000-nodesc"
 
