@@ -113,6 +113,9 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
                 if '}' in elem.tag:
                     elem.tag = elem.tag.split('}', 1)[1]
 
+            # Check if GPX file contains tracks or routes
+            has_track = root.find('.//trk') is not None or root.find('.//rte') is not None
+
             # --- Extract Metadata Description for Tracks ---
             track_metadata_desc = ""
             metadata = root.find('.//metadata')
@@ -190,14 +193,26 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
                 wpt_desc = wpt.findtext('desc') or ''
                 lon, lat = wpt.attrib['lon'], wpt.attrib['lat']
                 
-                target_layer = current_layer
-
                 wpt_color_raw = None
+                wpt_icon = "Markers"
                 
+                # Check for color and icon tags
                 for child in wpt.iter():
-                    if child.tag.split('}')[-1].split(':')[-1].lower() == 'color' and child.text:
+                    tag_name = child.tag.split('}')[-1].split(':')[-1].lower()
+                    if tag_name == 'color' and child.text:
                         wpt_color_raw = child.text
-                        break
+                    elif tag_name == 'icon' and child.text:
+                        wpt_icon = child.text.strip()
+
+                if has_track:
+                    target_layer = current_layer
+                else:
+                    layer_name = wpt_icon
+                    if layer_name not in folders:
+                        folder_elem = ET.Element(f"{kml_namespace}Folder")
+                        ET.SubElement(folder_elem, f"{kml_namespace}name").text = layer_name
+                        folders[layer_name] = folder_elem
+                    target_layer = folders[layer_name]
 
                 if not wpt_color_raw and wpt_name in name_color_map:
                     wpt_color_raw = name_color_map[wpt_name]
