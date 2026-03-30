@@ -113,10 +113,8 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
                 if '}' in elem.tag:
                     elem.tag = elem.tag.split('}', 1)[1]
 
-            # Check if GPX file contains tracks or routes
             has_track = root.find('.//trk') is not None or root.find('.//rte') is not None
 
-            # --- Extract Metadata Description for Tracks ---
             track_metadata_desc = ""
             metadata = root.find('.//metadata')
             if metadata is not None:
@@ -196,7 +194,6 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
                 wpt_color_raw = None
                 wpt_icon = "Markers"
                 
-                # Check for color and icon tags
                 for child in wpt.iter():
                     tag_name = child.tag.split('}')[-1].split(':')[-1].lower()
                     if tag_name == 'color' and child.text:
@@ -241,12 +238,12 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
         norm_line = ET.SubElement(document, f"{kml_namespace}Style", id=f"{line_map_id}-normal")
         ls_n = ET.SubElement(norm_line, f"{kml_namespace}LineStyle")
         ET.SubElement(ls_n, f"{kml_namespace}color").text = kml_color
-        ET.SubElement(ls_n, f"{kml_namespace}width").text = "4"
+        ET.SubElement(ls_n, f"{kml_namespace}width").text = "1"
 
         high_line = ET.SubElement(document, f"{kml_namespace}Style", id=f"{line_map_id}-highlight")
         ls_h = ET.SubElement(high_line, f"{kml_namespace}LineStyle")
         ET.SubElement(ls_h, f"{kml_namespace}color").text = kml_color
-        ET.SubElement(ls_h, f"{kml_namespace}width").text = "6"
+        ET.SubElement(ls_h, f"{kml_namespace}width").text = "2"
 
         line_smap = ET.SubElement(document, f"{kml_namespace}StyleMap", id=line_map_id)
         p1 = ET.SubElement(line_smap, f"{kml_namespace}Pair")
