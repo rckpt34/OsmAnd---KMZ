@@ -115,31 +115,34 @@ def convert_osmand_to_kmz(input_file, keep_nth_point, uploaded_filename):
                 if '}' in elem.tag:
                     elem.tag = elem.tag.split('}', 1)[1]
 
-            track_color_from_gpx = None
-            for ext in root.findall('./extensions'):
-                for color_elem in ext.findall('.//color'):
-                    if color_elem.text:
-                        track_color_from_gpx = color_elem.text
-                        break
-                if track_color_from_gpx:
-                    break
+            # Determine Track Color Priority
+            # 1. Try taking it from the JSON color_map first
+            track_raw_color = color_map.get(basename)
             
-            if not track_color_from_gpx:
-                for trk in root.findall('.//trk'):
-                    for ext in trk.findall('.//extensions'):
-                        for color_elem in ext.findall('.//color'):
-                            if color_elem.text:
-                                track_color_from_gpx = color_elem.text
-                                break
-                        if track_color_from_gpx:
+            # 2. If no JSON color is available, fall back to GPX extensions
+            if not track_raw_color:
+                track_color_from_gpx = None
+                for ext in root.findall('./extensions'):
+                    for color_elem in ext.findall('.//color'):
+                        if color_elem.text:
+                            track_color_from_gpx = color_elem.text
                             break
                     if track_color_from_gpx:
                         break
-
-            if track_color_from_gpx:
-                track_raw_color = track_color_from_gpx
-            else:
-                track_raw_color = color_map.get(basename, '#FF0000')
+                
+                if not track_color_from_gpx:
+                    for trk in root.findall('.//trk'):
+                        for ext in trk.findall('.//extensions'):
+                            for color_elem in ext.findall('.//color'):
+                                if color_elem.text:
+                                    track_color_from_gpx = color_elem.text
+                                    break
+                            if track_color_from_gpx:
+                                break
+                        if track_color_from_gpx:
+                            break
+                            
+                track_raw_color = track_color_from_gpx if track_color_from_gpx else '#FF0000'
 
             line_kml_color, line_mymaps_hex = parse_color(track_raw_color)
             used_colors.add((line_kml_color, line_mymaps_hex))
